@@ -7,38 +7,116 @@
 #include "tone.h"
 #include "ultrasonic.h"
 #include <stdio.h>
+
 extern volatile uint8_t time_update_flag;
 extern volatile uint16_t time;
 
+typedef enum {
+    MODE_SILENT,
+    MODE_BEEP_1500,
+    MODE_BEEP_1000,
+    MODE_BEEP_500,
+    MODE_CONTINUOUS_440,
+    MODE_CONTINUOUS_880
+} BeepMode;
+
 int main(void)
 {
-	sei(); // 전역인트럽트 활성화
-	board_init();
-	uart_init(9600);
-	uart_print("start!\n");
-	timer0_init();
-	us_init();
+    sei();
+    board_init();
+    uart_init(9600);
+    uart_print("start!\n");
+    timer0_init();
+    us_init();
 
-	uint32_t prev_trigger = millis();
-	while(1)
-	{
-		if (millis() - prev_trigger >=25)
-		{
-			prev_trigger = millis();
-			us_trigger();
-		}
+    uint32_t prev_trigger = millis();
+    uint32_t last_beep_time = 0;
+    uint32_t beep_duration = 100;  // tone 유지 시간
+    uint32_t beep_interval = 0;
+    uint8_t beep_active = 0;
+    BeepMode mode = MODE_SILENT;
+    uint16_t distance = 0;
 
-		if (time_update_flag) // 요청확인
-		{
-			time_update_flag = 0;			
-			uint16_t d = time * (0.0343 /2 * 278.3 / 262);
-			char s[8]; // buffer for string
-			sprintf( s, "%d\n" ,d  );
-			uart_print(s);
-		}
-		_delay_ms(1);
-		
-	}
+    while (1)
+    {
+        // 초음파 측정 주기 25ms
+        if (millis() - prev_trigger >= 25) {
+            prev_trigger = millis();
+            us_trigger();
+        }
+
+        // 거리 업데이트 발생 시
+        if (time_update_flag) {
+            time_update_flag = 0;
+            distance = time * (0.0343 /2 * 278.3 / 262);
+
+            // UART 디버깅
+            char s[16];
+            sprintf(s, "%d\n", distance);
+            uart_print(s);
+
+            // 거리 조건에 따라 모드 설정
+            if (distance >= 150) {
+                mode = MODE_SILENT;
+            } else if (distance >= 120) {
+                mode = MODE_BEEP_1500;
+            } else if (distance >= 80) {
+                mode = MODE_BEEP_1000;
+            } else if (distance >= 50) {
+                mode = MODE_BEEP_500;
+            } else if (distance >= 30) {
+                mode = MODE_CONTINUOUS_440;
+            } else {
+                mode = MODE_CONTINUOUS_880;
+            }
+        }
+
+        // tone 제어 (non-blocking 방식)
+        uint32_t now = millis();
+
+        if (mode == MODE_CONTINUOUS_440) {
+            if (!beep_active) {
+                tone(440);
+                beep_active = 1;
+            }
+        } else if (mode == MODE_CONTINUOUS_880) {
+            if (!beep_active) {
+                tone(880);
+                beep_active = 1;
+            }
+        } else {
+            // 간헐적 tone 출력
+            switch (mode) {
+                case MODE_BEEP_1500: beep_interval = 1500; break;
+                case MODE_BEEP_1000: beep_interval = 1000; break;
+                case MODE_BEEP_500:  beep_interval = 500;  break;
+                default: beep_interval = 0; break;
+            }
+
+            if (beep_interval > 0) {
+                if (!beep_active && (now - last_beep_time >= beep_interval)) {
+                    tone(440);
+                    beep_active = 1;
+                    last_beep_time = now;
+                }
+                if (beep_active && (now - last_beep_time >= beep_duration)) {
+                    tone_stop();
+                    beep_active = 0;
+                }
+            } else {
+                tone_stop();
+                beep_active = 0;
+            }
+        }
+
+        // 무음 모드에서 tone 중이면 끔
+        if (mode == MODE_SILENT) {
+            tone_stop();
+            beep_active = 0;
+        }
+
+        _delay_ms(1);  // 최소한의 CPU 쉼
+    }
 }
 
 ```
