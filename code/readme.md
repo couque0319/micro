@@ -13,9 +13,9 @@ extern volatile uint16_t time;
 
 typedef enum {
     MODE_SILENT,
-    MODE_BEEP_1500,
-    MODE_BEEP_1000,
-    MODE_BEEP_500,
+    MODE_BEEP_1500_440,
+    MODE_BEEP_1000_440,
+    MODE_BEEP_500_440,
     MODE_CONTINUOUS_440,
     MODE_CONTINUOUS_880
 } BeepMode;
@@ -31,39 +31,40 @@ int main(void)
 
     uint32_t prev_trigger = millis();
     uint32_t last_beep_time = 0;
-    uint32_t beep_duration = 100;  // tone 유지 시간
+    uint32_t beep_duration = 100;  // tone 지속 시간
     uint32_t beep_interval = 0;
+    uint16_t beep_frequency = 0;
     uint8_t beep_active = 0;
     BeepMode mode = MODE_SILENT;
     uint16_t distance = 0;
 
     while (1)
     {
-        // 초음파 측정 주기 25ms
+        // 거리 측정 트리거
         if (millis() - prev_trigger >= 25) {
             prev_trigger = millis();
             us_trigger();
         }
 
-        // 거리 업데이트 발생 시
+        // 거리 업데이트 처리
         if (time_update_flag) {
             time_update_flag = 0;
             distance = time * (0.0343 /2 * 278.3 / 262);
 
-            // UART 디버깅
+            // 디버깅용 UART 출력
             char s[16];
             sprintf(s, "%d\n", distance);
             uart_print(s);
 
-            // 거리 조건에 따라 모드 설정
+            // 거리 조건에 따른 tone 모드 설정
             if (distance >= 150) {
                 mode = MODE_SILENT;
             } else if (distance >= 120) {
-                mode = MODE_BEEP_1500;
+                mode = MODE_BEEP_1500_440;
             } else if (distance >= 80) {
-                mode = MODE_BEEP_1000;
+                mode = MODE_BEEP_1000_440;
             } else if (distance >= 50) {
-                mode = MODE_BEEP_500;
+                mode = MODE_BEEP_500_440;
             } else if (distance >= 30) {
                 mode = MODE_CONTINUOUS_440;
             } else {
@@ -71,51 +72,67 @@ int main(void)
             }
         }
 
-        // tone 제어 (non-blocking 방식)
+        // 현재 시간
         uint32_t now = millis();
 
-        if (mode == MODE_CONTINUOUS_440) {
-            if (!beep_active) {
-                tone(440);
-                beep_active = 1;
-            }
-        } else if (mode == MODE_CONTINUOUS_880) {
-            if (!beep_active) {
-                tone(880);
-                beep_active = 1;
-            }
-        } else {
-            // 간헐적 tone 출력
-            switch (mode) {
-                case MODE_BEEP_1500: beep_interval = 1500; break;
-                case MODE_BEEP_1000: beep_interval = 1000; break;
-                case MODE_BEEP_500:  beep_interval = 500;  break;
-                default: beep_interval = 0; break;
-            }
+        // tone 출력 처리
+        switch (mode)
+        {
+            case MODE_SILENT:
+                tone_stop();
+                beep_active = 0;
+                break;
 
-            if (beep_interval > 0) {
-                if (!beep_active && (now - last_beep_time >= beep_interval)) {
+            case MODE_BEEP_1500_440:
+                beep_interval = 1500;
+                beep_frequency = 440;
+                break;
+
+            case MODE_BEEP_1000_440:
+                beep_interval = 1000;
+                beep_frequency = 440;
+                break;
+
+            case MODE_BEEP_500_440:
+                beep_interval = 500;
+                beep_frequency = 440;
+                break;
+
+            case MODE_CONTINUOUS_440:
+                if (!beep_active) {
                     tone(440);
                     beep_active = 1;
-                    last_beep_time = now;
                 }
-                if (beep_active && (now - last_beep_time >= beep_duration)) {
-                    tone_stop();
-                    beep_active = 0;
+                break;
+
+            case MODE_CONTINUOUS_880:
+                if (!beep_active) {
+                    tone(880);
+                    beep_active = 1;
                 }
-            } else {
+                break;
+        }
+
+        // 간헐적 비프음 출력 (non-blocking)
+        if (mode == MODE_BEEP_1500_440 || mode == MODE_BEEP_1000_440 || mode == MODE_BEEP_500_440)
+        {
+            if (!beep_active && (now - last_beep_time >= beep_interval)) {
+                tone(beep_frequency);
+                beep_active = 1;
+                last_beep_time = now;
+            }
+            if (beep_active && (now - last_beep_time >= beep_duration)) {
                 tone_stop();
                 beep_active = 0;
             }
         }
 
-        // 무음 모드에서 tone 중이면 끔
-        if (mode == MODE_SILENT) {
-            tone_stop();
-            beep_active = 0;
+        // 지속음이 아닐 경우 is_beeping 초기화
+        if (mode == MODE_SILENT || mode <= MODE_BEEP_500_440) {
+            // 상태는 위에서 이미 처리됨
         }
 
-        _delay_ms(1);  // 최소한의 CPU 쉼
+        _delay_ms(1);  // CPU 부하 방지 (1ms 이내 유지)
     }
 }
 
